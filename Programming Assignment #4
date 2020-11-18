@@ -1,0 +1,294 @@
+'''
+Polling places
+
+Shuwen Fang
+
+Main file for polling place simulation
+'''
+
+import sys
+import random
+import queue
+import click
+import util
+
+
+
+class Voter(object):
+    def __init__(self, arrival_time, voting_duration, start_time, departure_time):
+        '''
+        Constructor for the Voter class
+
+        Input: 
+            arrival_time: (float) arrival time of voter 
+            voting_duration: (float) voting duration of voter 
+            start_time: (float) start time for filling out polls 
+            departure_time: (float) departure time of voter 
+        
+        Other attributes:
+            wait: (float) returns the wait time, which is simply start_time - arrival_time. 
+        '''
+        self.arrival_time = arrival_time
+        self.voting_duration = voting_duration
+        self.start_time = start_time
+        self.departure_time = departure_time
+        self.wait = start_time - arrival_time
+
+
+class Precinct:
+    def __init__(self, name, hours_open, max_num_voters,
+                 num_booths, arrival_rate, voting_duration_rate):
+        '''
+        Constructor for the Precinct class
+
+        Input:
+            name: (str) Name of the precinct
+            hours_open: (int) Hours the precinct will remain open
+            max_num_voters: (int) Number of voters in the precinct
+            num_booths: (int) Number of voting booths in the precinct
+            arrival_rate: (float) Rate at which voters arrive
+            voting_duration_rate: (float) Lambda for voting duration
+        '''
+        self.name = name
+        self.hours_open = hours_open
+        self.max_num_voters = max_num_voters
+        self.num_booths = num_booths
+        self.arrival_rate = arrival_rate
+        self.voting_duration_rate = voting_duration_rate
+
+
+    def simulate(self, percent_straight_ticket, straight_ticket_duration, seed):
+        '''
+        Simulate a day of voting
+
+        Input:
+            percent_straight_ticket: (float) Percentage of straight-ticket
+              voters as a decimal between 0 and 1 (inclusive)
+            straight_ticket_duration: (float) Voting duration for
+              straight-ticket voters
+            seed: (int) Random seed to use in the simulation
+
+        Output:
+            List of voters who voted in the precinct
+        '''
+        random.seed(seed)
+        voters = []
+        max_t = self.hours_open * 60
+        arrival_time = 0 
+        
+        booth = VotingBooths(self.num_booths)
+
+        while len(voters) < self.max_num_voters: 
+            gap, voting_duration = util.gen_voter_parameters(self.arrival_rate, \
+                                self.voting_duration_rate, percent_straight_ticket, \
+                                straight_ticket_duration)
+            arrival_time += gap
+            if arrival_time > max_t:
+                break 
+            else:
+                start, depart = booth.find_start_depart(arrival_time, voting_duration)
+                voters.append(Voter(arrival_time, voting_duration, start, depart))
+        
+        return voters
+
+
+class VotingBooths:
+    def __init__(self, num_booths):
+        '''
+        Constructor for VotingBooths Class to simulate booths
+
+        Input: 
+            num_booths(int): number of booths in the precinct
+
+        Attribute: 
+            que(PriorityQueue): a Priority que of length num_booths
+        '''
+        self.que = queue.PriorityQueue(num_booths)
+        
+
+    def add(self, depart):
+        '''
+        Adds a voter to booth, voter is represented by departure time
+
+        Input: 
+            depart (float): departure time of voter
+        '''
+        self.que.put(depart, block=False)
+
+
+    def leave(self):
+        '''
+        Removes the voter with earliest departure time from booth
+
+        Returns:
+            (float) departure time 
+        '''
+        return self.que.get(block=False)
+        
+
+    def find_start_depart(self, arrival_time, voting_duration):
+        ''' 
+        finds a voter's poll filling start time and departure time. 
+
+        Input: 
+            arrival_time (float): time of voter arrival
+            voter_duartion(float): amount of time taken to vote
+        
+        Returns:
+            start(float): poll filling start time 
+            depart(float): departure time
+        '''
+        if self.que.full():
+            #if full, remove one voter and add next one
+            time_empty = self.leave()
+            start = max(time_empty, arrival_time)
+        else: 
+            start = arrival_time
+        
+        depart = start + voting_duration
+        #adds departure time of next voter to voting booth
+        self.add(depart) 
+
+        return start, depart
+
+
+def mean_wait (voters):
+    '''
+    find mean wait for list of voters
+    Input: Voters(list of voters)
+    Returns: mean wait time (float)
+    '''
+    wait_sum = 0
+    for voter in voters:
+        wait_sum += voter.wait
+    return wait_sum / len(voters)
+
+
+def find_avg_wait_time(precinct, percent_straight_ticket, ntrials, initial_seed=0):
+    '''
+    Simulates a precinct multiple times with a given percentage of
+    straight-ticket voters. For each simulation, computes the average
+    waiting time of the voters, and returns the median of those average
+    waiting times.
+
+    Input:
+        precinct: (dictionary) A precinct dictionary
+        percent_straight_ticket: (float) Percentage straight-ticket voters
+        ntrials: (int) The number of trials to run
+        initial_seed: (int) Initial seed for random number generator
+
+    Output:
+        The median of the average waiting times returned by simulating
+        the precinct 'ntrials' times.
+    '''
+    poll_place = Precinct(precinct["name"], precinct["hours_open"],\
+            precinct["num_voters"], precinct["num_booths"],\
+            precinct["arrival_rate"], precinct["voting_duration_rate"])
+    n_mean_waits = []
+
+    for i in range(ntrials):
+        duration = precinct["straight_ticket_duration"]
+        voters = poll_place.simulate(percent_straight_ticket, duration,\
+                                    initial_seed + i)
+        n_mean_waits.append(mean_wait(voters))
+
+    return sorted(n_mean_waits)[ntrials//2]
+
+
+def find_percent_split_ticket(precinct, target_wait_time, ntrials, seed=0):
+    '''
+    Finds the percentage of split-ticket voters needed to bound
+    the (average) waiting time.
+
+    Input:
+        precinct: (dictionary) A precinct dictionary
+        target_wait_time: (float) The minimum waiting time
+        ntrials: (int) The number of trials to run when computing
+                 the average waiting time
+        seed: (int) A random seed
+
+    Output:
+        A tuple (percent_split_ticket, waiting_time) where:
+        - percent_split_ticket: (float) The percentage of split-ticket
+                                voters that ensures the average waiting time
+                                is above target_waiting_time
+        - waiting_time: (float) The actual average waiting time with that
+                        percentage of split-ticket voters
+
+        If the target waiting time is infeasible, returns (1, None)
+    '''
+    for i in range(11):
+        split = i/10 #0.0 to 1.0 
+        wait = find_avg_wait_time(precinct, 1-split, ntrials, seed)
+        if wait > target_wait_time: 
+            return (split, wait)
+    
+    return(1, None)
+
+
+# DO NOT REMOVE THESE LINES OF CODE
+# pylint: disable-msg= invalid-name, len-as-condition, too-many-locals
+# pylint: disable-msg= missing-docstring, too-many-branches
+# pylint: disable-msg= line-too-long
+@click.command(name="simulate")
+@click.argument('precincts_file', type=click.Path(exists=True))
+@click.option('--target-wait-time', type=float)
+@click.option('--print-voters', is_flag=True)
+def cmd(precincts_file, target_wait_time, print_voters):
+    precincts, seed = util.load_precincts(precincts_file)
+
+    if target_wait_time is None:
+        voters = {}
+        for p in precincts:
+            precinct = Precinct(p["name"],
+                                p["hours_open"],
+                                p["num_voters"],
+                                p["num_booths"],
+                                p["arrival_rate"],
+                                p["voting_duration_rate"])
+            voters[p["name"]] = precinct.simulate(p["percent_straight_ticket"], p["straight_ticket_duration"], seed)
+        print()
+        if print_voters:
+            for p in voters:
+                print("PRECINCT '{}'".format(p))
+                util.print_voters(voters[p])
+                print()
+        else:
+            for p in precincts:
+                pname = p["name"]
+                if pname not in voters:
+                    print("ERROR: Precinct file specified a '{}' precinct".format(pname))
+                    print("       But simulate_election_day returned no such precinct")
+                    print()
+                    sys.exit(-1)
+                pvoters = voters[pname]
+                if len(pvoters) == 0:
+                    print("Precinct '{}': No voters voted.".format(pname))
+                else:
+                    pl = "s" if len(pvoters) > 1 else ""
+                    closing = p["hours_open"]*60.
+                    last_depart = pvoters[-1].departure_time
+                    avg_wt = sum([v.start_time - v.arrival_time for v in pvoters]) / len(pvoters)
+                    print("PRECINCT '{}'".format(pname))
+                    print("- {} voter{} voted.".format(len(pvoters), pl))
+                    msg = "- Polls closed at {} and last voter departed at {:.2f}."
+                    print(msg.format(closing, last_depart))
+                    print("- Avg wait time: {:.2f}".format(avg_wt))
+                    print()
+    else:
+        precinct = precincts[0]
+
+        percent, avg_wt = find_percent_split_ticket(precinct, target_wait_time, 20, seed)
+
+        if percent == 1:
+            msg = "Waiting times are always below {:.2f}"
+            msg += " in precinct '{}'"
+            print(msg.format(target_wait_time, precinct["name"]))
+        else:
+            msg = "Precinct '{}' exceeds average waiting time"
+            msg += " of {:.2f} with {} percent split-ticket voters"
+            print(msg.format(precinct["name"], avg_wt, percent*100))
+
+
+if __name__ == "__main__":
+    cmd() # pylint: disable=no-value-for-parameter
